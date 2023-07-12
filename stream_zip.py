@@ -256,13 +256,14 @@ def stream_zip(files, chunk_size=65536, get_compressobj=lambda: zlib.compressobj
 
             _raise_if_beyond(file_offset, maximum=0xffffffffffffffff, exception_class=OffsetOverflowError)
 
-            chunks, size, crc_32 = _no_compression_buffered_data_size_crc_32(chunks, maximum_size=0xffffffffffffffff)
+            #chunks, size, crc_32 = _no_compression_buffered_data_size_crc_32(chunks, maximum_size=0xffffffffffffffff)
+            chunks, data = _no_compression_non_buffered_data_size_crc_32(chunks, maximum_size=0xffffffffffffffff)
 
             extra = zip_64_local_extra_struct.pack(
                 zip_64_extra_signature,
                 16,    # Size of extra
-                size,  # Uncompressed
-                size,  # Compressed
+                0,  # Uncompressed
+                0,  # Compressed
             )
             yield from _(local_header_signature)
             yield from _(local_header_struct.pack(
@@ -270,7 +271,7 @@ def stream_zip(files, chunk_size=65536, get_compressobj=lambda: zlib.compressobj
                 b'\x00\x08',  # Flags - utf-8 file names
                 0,            # Compression - no compression
                 mod_at_encoded,
-                crc_32,
+                0,
                 0xffffffff,   # Compressed size - since zip64
                 0xffffffff,   # Uncompressed size - since zip64
                 len(name_encoded),
@@ -281,6 +282,9 @@ def stream_zip(files, chunk_size=65536, get_compressobj=lambda: zlib.compressobj
 
             for chunk in chunks:
                 yield from _(chunk)
+
+            size = data.get("size")
+            crc_32 = data.get("crc_32")
 
             extra = zip_64_central_directory_extra_struct.pack(
                 zip_64_extra_signature,
@@ -374,6 +378,23 @@ def stream_zip(files, chunk_size=65536, get_compressobj=lambda: zlib.compressobj
             chunks = tuple(_chunks())
 
             return chunks, size, crc_32
+
+        def _no_compression_non_buffered_data_size_crc_32(chunks, maximum_size):
+            """ Streaming non-compressed zip
+            setse local header size and crc to 0"""
+            size = 0
+            crc_32 = zlib.crc32(b'')
+            data = {"size": 0}
+
+            def _chunks():
+                nonlocal size, crc_32
+                for chunk in chunks:
+                    data["size"] += len(chunk)
+                    _raise_if_beyond(size, maximum=maximum_size, exception_class=UncompressedSizeOverflowError)
+                    data["crc_32"] = zlib.crc32(chunk, crc_32)
+                    yield chunk
+
+            return _chunks(), data
 
         for name, modified_at, perms, method, chunks in files:
             _method, _auto_upgrade_central_directory, _get_compress_obj = method(offset, get_compressobj)
