@@ -427,7 +427,17 @@ def stream_zip(files, chunk_size=65536, get_compressobj=lambda: zlib.compressobj
             yield from _(name_encoded)
             yield from _(extra)
 
-            yield from _no_compression_streamed_data(chunks, uncompressed_size, crc_32, 0xffffffffffffffff)
+            data = {}
+
+            yield from _no_compression_streamed_data(chunks, uncompressed_size, crc_32, 0xffffffffffffffff, data)
+
+            if data["crc_32"] != crc_32:
+                crc_32 = data["crc_32"]
+                #raise CRC32IntegrityError()
+
+            if data["size"] != uncompressed_size:
+                uncompressed_size = data["size"]
+            #   raise UncompressedSizeIntegrityError()
 
             extra = zip_64_central_directory_extra_struct.pack(
                 zip_64_extra_signature,
@@ -478,7 +488,17 @@ def stream_zip(files, chunk_size=65536, get_compressobj=lambda: zlib.compressobj
             yield from _(name_encoded)
             yield from _(extra)
 
+            data = {}
+
             yield from _no_compression_streamed_data(chunks, uncompressed_size, crc_32, 0xffffffff)
+
+            if data["crc_32"] != crc_32:
+                crc_32 = data["crc_32"]
+                #raise CRC32IntegrityError()
+
+            if data["size"] != uncompressed_size:
+                uncompressed_size = data["size"]
+            #   raise UncompressedSizeIntegrityError()
 
             return central_directory_header_struct.pack(
                20,                 # Version made by
@@ -500,7 +520,7 @@ def stream_zip(files, chunk_size=65536, get_compressobj=lambda: zlib.compressobj
                file_offset,
             ), name_encoded, extra
 
-        def _no_compression_streamed_data(chunks, uncompressed_size, crc_32, maximum_size):
+        def _no_compression_streamed_data(chunks, uncompressed_size, crc_32, maximum_size, data):
             actual_crc_32 = zlib.crc32(b'')
             size = 0
             for chunk in chunks:
@@ -509,11 +529,8 @@ def stream_zip(files, chunk_size=65536, get_compressobj=lambda: zlib.compressobj
                 _raise_if_beyond(size, maximum=maximum_size, exception_class=UncompressedSizeOverflowError)
                 yield from _(chunk)
 
-            if actual_crc_32 != crc_32:
-                raise CRC32IntegrityError()
-
-            if size != uncompressed_size:
-                raise UncompressedSizeIntegrityError()
+            data["size"] = size
+            data["crc_32"] = actual_crc_32
 
         for name, modified_at, mode, method, chunks in files:
             method = \
