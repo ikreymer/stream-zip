@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from collections import deque
+from dataclasses import dataclass
 from datetime import datetime
 from struct import Struct
 import asyncio
@@ -97,6 +98,27 @@ class _ZIP_AUTO_TYPE():
         return _ZIP_AUTO_TYPE_INNER()
 
 
+class CRCSizeComputed:
+    def __init__(self, crc_32_mask, aes_size_increase):
+        self.crc_32_mask = crc_32_mask
+        self.aes_size_increase = aes_size_increase
+
+        self.crc_32 = 0
+        self.size = 0
+
+    @property
+    def uncompressed_size(self):
+        return self.size
+    
+    @property
+    def compressed_size(self):
+        return self.size + self.aes_size_increase
+    
+    @property
+    def masked_crc_32(self):
+        return self.crc_32 & self.crc_32_mask
+
+    
 ###############################
 # Public sentinel objects/types
 
@@ -565,7 +587,7 @@ def stream_zip(files: Iterable[MemberFile], chunk_size: int=65536,
                 uncompressed_size,
                 compressed_size,
             ) + mod_at_unix_extra + aes_extra
-            flags = aes_flags | utf8_flag
+            flags = aes_flags | data_descriptor_flag | utf8_flag
             masked_crc_32 = crc_32 & crc_32_mask
 
             yield from _(local_header_signature)
@@ -583,7 +605,12 @@ def stream_zip(files: Iterable[MemberFile], chunk_size: int=65536,
             yield from _(name_encoded)
             yield from _(extra)
 
-            yield from encryption_func(_no_compression_streamed_data(chunks, uncompressed_size, crc_32, 0xffffffffffffffff))
+            computed = CRCSizeComputed(crc_32_mask, aes_size_increase)
+
+            yield from encryption_func(_no_compression_streamed_data(chunks, uncompressed_size, crc_32, 0xffffffffffffffff, computed))
+
+            yield from _(data_descriptor_signature)
+            yield from _(data_descriptor_zip_64_struct.pack(computed.masked_crc_32, computed.compressed_size, computed.uncompressed_size))
 
             extra = zip_64_central_directory_extra_struct.pack(
                 zip_64_extra_signature,
@@ -625,7 +652,7 @@ def stream_zip(files: Iterable[MemberFile], chunk_size: int=65536,
 
             compressed_size = uncompressed_size + aes_size_increase
             extra = mod_at_unix_extra + aes_extra
-            flags = aes_flags | utf8_flag
+            flags = aes_flags | data_descriptor_flag | utf8_flag
             masked_crc_32 = crc_32 & crc_32_mask
 
             yield from _(local_header_signature)
@@ -643,7 +670,13 @@ def stream_zip(files: Iterable[MemberFile], chunk_size: int=65536,
             yield from _(name_encoded)
             yield from _(extra)
 
-            yield from encryption_func(_no_compression_streamed_data(chunks, uncompressed_size, crc_32, 0xffffffff))
+            computed = CRCSizeComputed(crc_32_mask, aes_size_increase)
+
+            yield from encryption_func(_no_compression_streamed_data(chunks, uncompressed_size, crc_32, 0xffffffff, computed))
+
+            yield from _(data_descriptor_signature)
+            yield from _(data_descriptor_zip_64_struct.pack(computed.masked_crc_32, computed.compressed_size, computed.uncompressed_size))
+
 
             return central_directory_header_struct.pack(
                20,                 # Version made by
@@ -665,7 +698,7 @@ def stream_zip(files: Iterable[MemberFile], chunk_size: int=65536,
                file_offset,
             ), name_encoded, extra
 
-        def _no_compression_streamed_data(chunks: Iterable[bytes], uncompressed_size: int, crc_32: int, maximum_size: int) -> Generator[bytes, None, Any]:
+        def _no_compression_streamed_data(chunks: Iterable[bytes], uncompressed_size: int, crc_32: int, maximum_size: int, computed: CRCSizeComputed) -> Generator[bytes, None, Any]:
             actual_crc_32 = zlib.crc32(b'')
             size = 0
             for chunk in chunks:
@@ -674,11 +707,16 @@ def stream_zip(files: Iterable[MemberFile], chunk_size: int=65536,
                 _raise_if_beyond(size, maximum=maximum_size, exception_class=UncompressedSizeOverflowError)
                 yield chunk
 
-            if actual_crc_32 != crc_32:
+            ignore_crc_and_size = crc_32 == 0 and uncompressed_size == 0
+
+            if actual_crc_32 != crc_32 and not ignore_crc_and_size:
                 raise CRC32IntegrityError()
 
-            if size != uncompressed_size:
+            if size != uncompressed_size and not ignore_crc_and_size:
                 raise UncompressedSizeIntegrityError()
+            
+            computed.crc_32 = actual_crc_32
+            computed.size = size
 
         for name, modified_at, mode, method, chunks in files:
             _method, _auto_upgrade_central_directory, _get_compress_obj, uncompressed_size, crc_32 = method._get(offset, get_compressobj)
