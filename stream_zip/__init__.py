@@ -106,18 +106,11 @@ class CRCSizeComputed:
         self.crc_32 = 0
         self.size = 0
 
-    @property
-    def uncompressed_size(self):
-        return self.size
-    
-    @property
-    def compressed_size(self):
-        return self.size + self.aes_size_increase
-    
-    @property
-    def masked_crc_32(self):
-        return self.crc_32 & self.crc_32_mask
-
+    def get(self) -> tuple[int, int, int]:
+        uncompressed_size = self.size
+        masked_crc_32 = self.crc_32 & self.crc_32_mask
+        compressed_size = self.size + self.aes_size_increase
+        return masked_crc_32, compressed_size, uncompressed_size
     
 ###############################
 # Public sentinel objects/types
@@ -608,9 +601,10 @@ def stream_zip(files: Iterable[MemberFile], chunk_size: int=65536,
             computed = CRCSizeComputed(crc_32_mask, aes_size_increase)
 
             yield from encryption_func(_no_compression_streamed_data(chunks, uncompressed_size, crc_32, 0xffffffffffffffff, computed))
+            masked_crc_32, compressed_size, uncompressed_size = computed.get()
 
             yield from _(data_descriptor_signature)
-            yield from _(data_descriptor_zip_64_struct.pack(computed.masked_crc_32, computed.compressed_size, computed.uncompressed_size))
+            yield from _(data_descriptor_zip_64_struct.pack(masked_crc_32, compressed_size, uncompressed_size))
 
             extra = zip_64_central_directory_extra_struct.pack(
                 zip_64_extra_signature,
@@ -673,9 +667,10 @@ def stream_zip(files: Iterable[MemberFile], chunk_size: int=65536,
             computed = CRCSizeComputed(crc_32_mask, aes_size_increase)
 
             yield from encryption_func(_no_compression_streamed_data(chunks, uncompressed_size, crc_32, 0xffffffff, computed))
+            masked_crc_32, compressed_size, uncompressed_size = computed.get()
 
             yield from _(data_descriptor_signature)
-            yield from _(data_descriptor_zip_64_struct.pack(computed.masked_crc_32, computed.compressed_size, computed.uncompressed_size))
+            yield from _(data_descriptor_zip_64_struct.pack(masked_crc_32, compressed_size, uncompressed_size))
 
 
             return central_directory_header_struct.pack(
