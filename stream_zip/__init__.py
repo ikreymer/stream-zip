@@ -702,12 +702,10 @@ def stream_zip(files: Iterable[MemberFile], chunk_size: int=65536,
                 _raise_if_beyond(size, maximum=maximum_size, exception_class=UncompressedSizeOverflowError)
                 yield chunk
 
-            ignore_crc_and_size = crc_32 == 0 and uncompressed_size == 0
-
-            if actual_crc_32 != crc_32 and not ignore_crc_and_size:
+            if actual_crc_32 != crc_32 and crc_32 != 0:
                 raise CRC32IntegrityError()
 
-            if size != uncompressed_size and not ignore_crc_and_size:
+            if size != uncompressed_size and uncompressed_size != 0:
                 raise UncompressedSizeIntegrityError()
             
             computed.crc_32 = actual_crc_32
